@@ -2,8 +2,9 @@ const WebSocket = require('ws');
 const dgram = require('dgram');
 const midi = require('midi');
 const readline = require('readline');
+const osc = require('osc');
 
-const useWebSocket = true; // <<== Toggle between WebSocket and UDP
+const useWebSocket = false; // <<== Toggle between WebSocket and OSC over UDP
 
 const midiInput = new midi.Input();
 let ws = null;
@@ -23,7 +24,7 @@ rl.question('What internet port would you like to use (3902/3907)? ', (answer) =
 
 	if (!useWebSocket) {
 		udpClient = dgram.createSocket('udp4');
-		console.log(`UDP client initialized. Will send to 199.19.73.131:${internetPort}`);
+		console.log(`OSC UDP client initialized. Will send to 199.19.73.131:${internetPort}`);
 	}
 
 	console.log("midi input (transmit) available: ");
@@ -59,19 +60,9 @@ rl.question('What internet port would you like to use (3902/3907)? ', (answer) =
 					}
 					console.log(`NoteOn: ${altspaceMessage}`);
 
-					let sendMessage = "[" + note + "," + vel + "," + channel + "]";
+					let sendMessage = [note, vel, channel];
 
-					if (useWebSocket && ws && weAreConnected) {
-						try {
-							ws.send(sendMessage);
-						} catch (err) {
-							console.log("can't send note right now: we don't seem to be connected");
-						}
-					} else if (!useWebSocket && udpClient) {
-						udpClient.send(sendMessage, internetPort, '199.19.73.131', (err) => {
-							if (err) console.log("UDP send error:", err.message);
-						});
-					}
+					sendOutMessage('/note/on', sendMessage, internetPort);
 				}
 
 				if ((command & 0xF0) === 0x80) { // note off message
@@ -82,19 +73,9 @@ rl.question('What internet port would you like to use (3902/3907)? ', (answer) =
 					}
 					console.log(`NoteOff: ${altspaceMessage}`);
 
-					let sendMessage = "[" + note + "," + vel + "," + channel + "]";
+					let sendMessage = [note, vel, channel];
 
-					if (useWebSocket && ws && weAreConnected) {
-						try {
-							ws.send(sendMessage);
-						} catch (err) {
-							console.log("can't send note right now: we don't seem to be connected");
-						}
-					} else if (!useWebSocket && udpClient) {
-						udpClient.send(sendMessage, internetPort, '199.19.73.131', (err) => {
-							if (err) console.log("UDP send error:", err.message);
-						});
-					}
+					sendOutMessage('/note/off', sendMessage, internetPort);
 				}
 
 				if ((command & 0xF0) === 0xB0) { // note CC
@@ -114,6 +95,26 @@ rl.question('What internet port would you like to use (3902/3907)? ', (answer) =
 		}
 	});
 });
+
+function sendOutMessage(oscAddress, dataArray, port) {
+	if (useWebSocket && ws && weAreConnected) {
+		try {
+			ws.send(JSON.stringify(dataArray));
+		} catch (err) {
+			console.log("can't send note right now: we don't seem to be connected");
+		}
+	} else if (!useWebSocket && udpClient) {
+		const oscMessage = {
+			address: oscAddress,
+			args: dataArray.map(val => ({ type: "i", value: val }))
+		};
+		const buffer = osc.writePacket(oscMessage);
+
+		udpClient.send(buffer, port, '199.19.73.131', (err) => {
+			if (err) console.log("UDP/OSC send error:", err.message);
+		});
+	}
+}
 
 function connectToServer(port) {
 	ws = new WebSocket('ws://199.19.73.131' + ':' + port);
