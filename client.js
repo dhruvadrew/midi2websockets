@@ -19,13 +19,13 @@ const argv = yargs(hideBin(process.argv))
     alias: 'i',
     description: 'Target IP address',
     type: 'string',
-    default: '127.0.0.1',
+    default: '192.168.12.244',
   })
   .option('port', {
     alias: 'p',
     description: 'Target port',
     type: 'number',
-    default: 3902,
+    default: 3907,
   })
   .option('ws', {
     description: 'Use WebSocket (default is UDP)',
@@ -126,6 +126,7 @@ function handleMidiMessage(message) {
 
 // ====== Send MIDI via WebSocket or UDP ======
 function sendOutMessage(oscAddress, dataArray) {
+  console.log("yup");
   if (useWebSocket && ws && weAreConnected) {
     try {
       ws.send(JSON.stringify(dataArray));
@@ -133,6 +134,7 @@ function sendOutMessage(oscAddress, dataArray) {
       console.warn("WebSocket send failed:", err.message);
     }
   } else if (!useWebSocket && udpClient) {
+    console.log("here");
     const oscMessage = {
       address: oscAddress,
       args: dataArray.map(val => ({ type: "i", value: val }))
