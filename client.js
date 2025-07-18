@@ -1,5 +1,4 @@
 // ====== Imports ======
-const WebSocket = require('ws');
 const dgram = require('dgram');
 const midi = require('midi');
 const readline = require('readline');
@@ -7,13 +6,7 @@ const osc = require('osc');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 
-// ====== CLI Interface ======
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
-
-// ====== Command-line Arguments ======
+// ====== CLI Options ======
 const argv = yargs(hideBin(process.argv))
   .option('ip', {
     alias: 'i',
@@ -27,13 +20,8 @@ const argv = yargs(hideBin(process.argv))
     type: 'number',
     default: 3907,
   })
-  .option('ws', {
-    description: 'Use WebSocket (default is UDP)',
-    type: 'boolean',
-    default: false
-  })
   .option('keyboard', {
-    description: 'Enable keyboard MIDI input',
+    description: 'Enable keyboard input (A–K)',
     type: 'boolean',
     default: true
   })
@@ -41,30 +29,26 @@ const argv = yargs(hideBin(process.argv))
 
 const TARGET_IP = argv.ip;
 const TARGET_PORT = argv.port;
-const useWebSocket = argv.ws;
 const enableKeyboard = argv.keyboard;
 
 // ====== Global State ======
 const midiInput = new midi.Input();
-let ws = null;
-let udpClient = null;
-let weAreConnected = false;
+const udpClient = dgram.createSocket('udp4');
 let isGuitar = false;
 
-// ====== Initialization ======
+// ====== Startup Logs ======
 console.clear();
-console.log(`Using ${useWebSocket ? 'WebSocket' : 'OSC/UDP'} → ${TARGET_IP}:${TARGET_PORT}`);
-
-// ====== UDP Setup ======
-if (!useWebSocket) {
-  udpClient = dgram.createSocket('udp4');
-}
-
-// ====== MIDI Setup ======
-console.log("Available MIDI input ports:");
+console.log(`🎛️ Sending OSC to ${TARGET_IP}:${TARGET_PORT}`);
+console.log("🎹 Available MIDI input ports:");
 for (let i = 0; i < midiInput.getPortCount(); i++) {
   console.log(`[${i}] ${midiInput.getPortName(i)}`);
 }
+
+// ====== Prompt MIDI Port Selection ======
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
 
 rl.question('Select MIDI port (or type -1 to skip): ', (answer) => {
   const selectedPort = parseInt(answer);
@@ -75,103 +59,110 @@ rl.question('Select MIDI port (or type -1 to skip): ', (answer) => {
     if (portName.includes("Guitar")) isGuitar = true;
 
     midiInput.ignoreTypes(true, true, true);
-
     midiInput.on('message', (deltaTime, message) => {
       handleMidiMessage(message);
     });
+
+    console.log(`✅ Listening on MIDI port: ${portName}`);
+  } else {
+    console.log("⛔ Skipping MIDI input.");
   }
 
   if (enableKeyboard) {
     setupKeyboardInput();
   }
-
-  if (useWebSocket) {
-    connectToServer();
-  }
 });
 
-// ====== MIDI Message Handler ======
+// ====== MIDI Handler ======
 function handleMidiMessage(message) {
-  const command = message[0];
-  let note = message[1];
-  let vel = message[2];
-  let channel = command & 0x0F;
+  // Validate message length
+  if (message.length < 3) {
+    console.log(`❌ Invalid MIDI message length: ${message.length}`);
+    return;
+  }
 
-  if (!isGuitar || (isGuitar && channel > 0)) {
-    if (isGuitar) channel -= 6;
+  const status = message[0];
+  const note = message[1];
+  const velocity = message[2];
+  
+  // Extract channel (0-15) and message type
+  let channel = status & 0x0F;
+  const messageType = status & 0xF0;
+  
+  // Guitar channel adjustment - be more careful here
+  if (isGuitar && channel >= 6) {
+    channel -= 6;
+  }
+  
+  console.log(`Raw MIDI: [${message[0]}, ${message[1]}, ${message[2]}] - Type: 0x${messageType.toString(16)}, Channel: ${channel}`);
 
-    let sendMessage = [note, vel, channel];
-    let msgType = null;
-
-    switch (command & 0xF0) {
-      case 0x90:
-        msgType = '/note/on';
-        console.log(`NoteOn: [${sendMessage}]`);
-        break;
-      case 0x80:
-        msgType = '/note/off';
-        sendMessage[1] = 0;
-        console.log(`NoteOff: [${sendMessage}]`);
-        break;
-      case 0xB0:
-        console.log(`Control Change: ${message}`);
-        return;
-    }
-
-    if (msgType) {
-      sendOutMessage(msgType, sendMessage);
-    }
+  // Handle Note On (0x90) with velocity > 0
+  if (messageType === 0x90 && velocity > 0) {
+    const data = [note, velocity, channel];
+    console.log(`🎵 NoteOn: Note=${note}, Velocity=${velocity}, Channel=${channel}`);
+    sendOSC('/note/on', data);
+  } 
+  // Handle Note Off (0x80) OR Note On with velocity 0
+  else if (messageType === 0x80 || (messageType === 0x90 && velocity === 0)) {
+    const data = [note, 0, channel];
+    console.log(`🎵 NoteOff: Note=${note}, Channel=${channel}`);
+    sendOSC('/note/off', data);
+  }
+  // Handle Control Change (0xB0)
+  else if (messageType === 0xB0) {
+    const data = [note, velocity, channel]; // note = CC#, velocity = value
+    console.log(`🎛️ Control Change: CC=${note}, Value=${velocity}, Channel=${channel}`);
+    sendOSC('/control/change', data);
+  }
+  // Handle other message types
+  else {
+    console.log(`❓ Unhandled MIDI: [${message[0]}, ${message[1]}, ${message[2]}] - Type: 0x${messageType.toString(16)}`);
   }
 }
 
-// ====== Send MIDI via WebSocket or UDP ======
-function sendOutMessage(oscAddress, dataArray) {
-  console.log("yup");
-  if (useWebSocket && ws && weAreConnected) {
-    try {
-      ws.send(JSON.stringify(dataArray));
-    } catch (err) {
-      console.warn("WebSocket send failed:", err.message);
-    }
-  } else if (!useWebSocket && udpClient) {
-    console.log("here");
-    const oscMessage = {
-      address: oscAddress,
-      args: dataArray.map(val => ({ type: "i", value: val }))
-    };
-    const buffer = osc.writePacket(oscMessage);
-    udpClient.send(buffer, TARGET_PORT, TARGET_IP, (err) => {
-      if (err) console.error("UDP send error:", err.message);
+// ====== Send OSC Message ======
+function sendOSC(address, values) {
+  try {
+    // Validate input values
+    const validatedValues = values.map(v => {
+      const intValue = parseInt(v);
+      if (isNaN(intValue)) {
+        console.warn(`⚠️ Invalid value converted to 0: ${v}`);
+        return 0;
+      }
+      return intValue;
     });
+
+    // Create OSC message with explicit integer types
+    const msg = {
+      address: address,
+      args: validatedValues.map(v => ({
+        type: 'i',
+        value: v
+      }))
+    };
+
+    console.log(`📡 Sending OSC: ${address} [${validatedValues.join(', ')}]`);
+    
+    const buffer = osc.writePacket(msg);
+    
+    // Add a small delay to prevent message flooding
+    setTimeout(() => {
+      udpClient.send(buffer, TARGET_PORT, TARGET_IP, (err) => {
+        if (err) {
+          console.error(`❌ UDP send error: ${err.message}`);
+        } else {
+          console.log(`✅ OSC sent successfully: ${address}`);
+        }
+      });
+    }, 1); // 1ms delay
+    
+  } catch (error) {
+    console.error(`❌ OSC packet creation error: ${error.message}`);
   }
 }
 
-// ====== WebSocket Connection ======
-function connectToServer() {
-  console.log("Connecting to WebSocket server...");
-
-  ws = new WebSocket(`ws://${TARGET_IP}:${TARGET_PORT}`);
-
-  ws.on('open', () => {
-    weAreConnected = true;
-    console.log("✅ WebSocket connected");
-  });
-
-  ws.on('close', () => {
-    console.log("WebSocket connection closed");
-    ws = null;
-    weAreConnected = false;
-  });
-
-  ws.on('error', (err) => {
-    console.error("WebSocket error:", err.message);
-    ws = null;
-    weAreConnected = false;
-    setTimeout(connectToServer, 1000); // retry
-  });
-}
-
-// ====== Keyboard MIDI Input (Optional) ======
+// ====== Keyboard Input (Optional) ======
 function setupKeyboardInput() {
   const stdin = process.stdin;
   stdin.setRawMode(true);
@@ -179,43 +170,47 @@ function setupKeyboardInput() {
   stdin.setEncoding('utf8');
 
   const keyMap = {
-    a: 60, // Middle C
-    s: 62,
-    d: 64,
-    f: 65,
-    g: 67,
-    h: 69,
-    j: 71,
-    k: 72 // C above
+    a: 60, s: 62, d: 64, f: 65,
+    g: 67, h: 69, j: 71, k: 72
   };
 
-  console.log("Keyboard mode active. Press A–K for notes. Press Q to quit.");
+  const activeKeys = new Set();
+
+  console.log("⌨️  Keyboard mode active. Press A–K for notes. Press Q to quit.");
 
   stdin.on('data', (key) => {
-    if (key === '\u0003' || key.toLowerCase() === 'q') {
-      console.log("Exiting...");
+    const lowerKey = key.toLowerCase();
+
+    if (key === '\u0003' || lowerKey === 'q') {
+      console.log("👋 Exiting...");
       process.exit();
     }
 
-    const note = keyMap[key.toLowerCase()];
-    if (note !== undefined) {
-      let message = [note, 127, 0]; // channel 0
-      console.log(`Keyboard NoteOn: ${message}`);
-      sendOutMessage('/note/on', message);
+    const note = keyMap[lowerKey];
+    if (note !== undefined && !activeKeys.has(lowerKey)) {
+      activeKeys.add(lowerKey);
+      const onData = [note, 127, 0];
+      console.log(`⌨️  Keyboard NoteOn: Note=${note}, Velocity=127, Channel=0`);
+      sendOSC('/note/on', onData);
 
       setTimeout(() => {
-        message[1] = 0; // velocity 0 = note off
-        sendOutMessage('/note/off', message);
-      }, 200); // auto note-off after 200ms
+        const offData = [note, 0, 0];
+        console.log(`⌨️  Keyboard NoteOff: Note=${note}, Channel=0`);
+        sendOSC('/note/off', offData);
+        activeKeys.delete(lowerKey);
+      }, 200);
     }
   });
 }
 
-// ====== Graceful Exit ======
+// ====== Graceful Shutdown ======
 process.on("SIGINT", () => {
-  console.log("\nGracefully shutting down...");
-  try { midiInput.closePort(); } catch (e) {}
-  if (ws) ws.terminate();
-  if (udpClient) udpClient.close();
+  console.log("\n🧹 Cleaning up...");
+  try { 
+    midiInput.closePort(); 
+  } catch (e) {
+    console.log("MIDI port already closed");
+  }
+  udpClient.close();
   process.exit();
 });
