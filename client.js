@@ -33,45 +33,76 @@ const enableKeyboard = argv.keyboard;
 
 // ====== Global State ======
 const midiInput = new midi.Input();
+const midiOutput = new midi.Output();
 const udpClient = dgram.createSocket('udp4');
 let isGuitar = false;
+let selectedMidiOut = -1;
 
-// ====== Startup Logs ======
-console.clear();
-console.log(`🎛️ Sending OSC to ${TARGET_IP}:${TARGET_PORT}`);
-console.log("🎹 Available MIDI input ports:");
-for (let i = 0; i < midiInput.getPortCount(); i++) {
-  console.log(`[${i}] ${midiInput.getPortName(i)}`);
-}
-
-// ====== Prompt MIDI Port Selection ======
+// ====== Setup Readline for Prompts ======
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
 });
 
-rl.question('Select MIDI port (or type -1 to skip): ', (answer) => {
-  const selectedPort = parseInt(answer);
+// ====== Startup Info ======
+console.clear();
+console.log(`🎛️ Sending OSC to ${TARGET_IP}:${TARGET_PORT}`);
+console.log("🎼 Available MIDI output ports:");
+for (let i = 0; i < midiOutput.getPortCount(); i++) {
+  console.log(`[${i}] ${midiOutput.getPortName(i)}`);
+}
 
-  if (selectedPort >= 0) {
-    midiInput.openPort(selectedPort);
-    const portName = midiInput.getPortName(selectedPort);
-    if (portName.includes("Guitar")) isGuitar = true;
+// ====== Prompt for MIDI Output First ======
+function promptMidiOutput() {
+  rl.question('Select MIDI output port for playback (or type -1 to skip): ', (answer) => {
+    selectedMidiOut = parseInt(answer);
 
-    midiInput.ignoreTypes(true, true, true);
-    midiInput.on('message', (deltaTime, message) => {
-      handleMidiMessage(message);
-    });
+    if (selectedMidiOut >= 0) {
+      midiOutput.openPort(selectedMidiOut);
+      console.log(`✅ MIDI output port opened: ${midiOutput.getPortName(selectedMidiOut)}`);
+    } else {
+      console.log("⛔ Skipping MIDI output.");
+    }
 
-    console.log(`✅ Listening on MIDI port: ${portName}`);
-  } else {
-    console.log("⛔ Skipping MIDI input.");
+    promptMidiInput(); // ➡️ continue to input
+  });
+}
+
+// ====== Prompt for MIDI Input ======
+function promptMidiInput() {
+  console.log("🎹 Available MIDI input ports:");
+  for (let i = 0; i < midiInput.getPortCount(); i++) {
+    console.log(`[${i}] ${midiInput.getPortName(i)}`);
   }
 
-  if (enableKeyboard) {
-    setupKeyboardInput();
-  }
-});
+  rl.question('Select MIDI input port (or type -1 to skip): ', (answer) => {
+    const selectedPort = parseInt(answer);
+
+    if (selectedPort >= 0) {
+      midiInput.openPort(selectedPort);
+      const portName = midiInput.getPortName(selectedPort);
+      if (portName.includes("Guitar")) isGuitar = true;
+
+      midiInput.ignoreTypes(true, true, true);
+      midiInput.on('message', (deltaTime, message) => {
+        handleMidiMessage(message);
+      });
+
+      console.log(`✅ Listening on MIDI port: ${portName}`);
+    } else {
+      console.log("⛔ Skipping MIDI input.");
+    }
+
+    if (enableKeyboard) {
+      setupKeyboardInput();
+    }
+
+    rl.close(); // done prompting
+  });
+}
+
+// ====== Start Prompt Chain ======
+promptMidiOutput();
 
 // ====== MIDI Handler ======
 function handleMidiMessage(message) {
@@ -101,6 +132,11 @@ function handleMidiMessage(message) {
     const data = [note, velocity, channel];
     console.log(`🎵 NoteOn: Note=${note}, Velocity=${velocity}, Channel=${channel}`);
     sendOSC('/note/on', data);
+    if (selectedMidiOut >= 0) {
+      const noteOn = 0x90; // Note On, channel 0
+      midiOutput.sendMessage([noteOn, note, 127]);
+    }
+
   } 
   // Handle Note Off (0x80) OR Note On with velocity 0
   else if (messageType === 0x80 || (messageType === 0x90 && velocity === 0)) {
@@ -198,6 +234,10 @@ function setupKeyboardInput() {
         console.log(`⌨️  Keyboard NoteOff: Note=${note}, Channel=0`);
         sendOSC('/note/off', offData);
         activeKeys.delete(lowerKey);
+        if (selectedMidiOut >= 0) {
+          const noteOff = 0x80; // Note Off, channel 0
+          midiOutput.sendMessage([noteOff, note, 0]);
+        }
       }, 200);
     }
   });
