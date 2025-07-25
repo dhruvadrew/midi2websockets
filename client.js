@@ -66,7 +66,7 @@ oscServer.on("message", (msg) => {
   console.log(`📨 Received OSC message: ${msg.address} ${JSON.stringify(msg.args)}`);
 
   if (msg.address === "/balloon/pop") {
-    const [note, velocity, channel] = msg.args.map(arg => arg.value);
+    const [note, velocity, channel] = msg.args;
     console.log(`🎈 Balloon popped! Note=${note}, Velocity=${velocity}, Channel=${channel}`);
   }
 });
