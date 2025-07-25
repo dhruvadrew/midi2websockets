@@ -52,6 +52,32 @@ for (let i = 0; i < midiOutput.getPortCount(); i++) {
   console.log(`[${i}] ${midiOutput.getPortName(i)}`);
 }
 
+// ====== OSC Receiver (Port 7000) ======
+const oscServer = new osc.UDPPort({
+  localAddress: "0.0.0.0",
+  localPort: 7000
+});
+
+oscServer.on("ready", () => {
+  console.log("📥 OSC Receiver listening on port 7000");
+});
+
+oscServer.on("message", (msg) => {
+  console.log(`📨 Received OSC message: ${msg.address} ${JSON.stringify(msg.args)}`);
+
+  if (msg.address === "/balloon/pop") {
+    const [note, velocity, channel] = msg.args.map(arg => arg.value);
+    console.log(`🎈 Balloon popped! Note=${note}, Velocity=${velocity}, Channel=${channel}`);
+  }
+});
+
+oscServer.on("error", (err) => {
+  console.error("❌ OSC Server Error:", err.message);
+});
+
+oscServer.open();
+
+
 // ====== Prompt for MIDI Output First ======
 function promptMidiOutput() {
   rl.question('Select MIDI output port for playback (or type -1 to skip): ', (answer) => {
