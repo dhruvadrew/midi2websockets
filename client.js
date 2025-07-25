@@ -68,7 +68,23 @@ oscServer.on("message", (msg) => {
   if (msg.address === "/balloon/pop") {
     const [note, velocity, channel] = msg.args;
     console.log(`🎈 Balloon popped! Note=${note}, Velocity=${velocity}, Channel=${channel}`);
+
+    if (selectedMidiOut >= 0) {
+      const noteOn = 0x90 + (channel & 0x0F); // Ensure channel is in 0–15 range
+      const noteOff = 0x80 + (channel & 0x0F);
+
+      // Send Note On
+      midiOutput.sendMessage([noteOn, note, velocity]);
+
+      // Send Note Off after short delay (e.g. 200ms)
+      setTimeout(() => {
+        midiOutput.sendMessage([noteOff, note, 0]);
+      }, 200);
+    } else {
+      console.warn("⚠️ No MIDI output selected. Cannot send popped balloon note.");
+    }
   }
+
 });
 
 oscServer.on("error", (err) => {
@@ -160,7 +176,7 @@ function handleMidiMessage(message) {
     sendOSC('/note/on', data);
     if (selectedMidiOut >= 0) {
       const noteOn = 0x90; // Note On, channel 0
-      midiOutput.sendMessage([noteOn, note, 127]);
+      //midiOutput.sendMessage([noteOn, note, 127]); just for debugging
     }
 
   } 
