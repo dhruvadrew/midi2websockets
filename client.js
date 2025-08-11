@@ -79,7 +79,7 @@ oscServer.on("message", (msg) => {
       // Send Note Off after short delay (e.g. 200ms)
       setTimeout(() => {
         midiOutput.sendMessage([noteOff, note, 0]);
-      }, 200);
+      }, 1);
     } else {
       console.warn("⚠️ No MIDI output selected. Cannot send popped balloon note.");
     }
@@ -280,7 +280,7 @@ function setupKeyboardInput() {
           const noteOff = 0x80; // Note Off, channel 0
           midiOutput.sendMessage([noteOff, note, 0]);
         }
-      }, 200);
+      }, 1);
     }
   });
 }
